@@ -6,13 +6,18 @@ from app.core.security import PathSecurity
 
 
 @pytest.mark.asyncio
-async def test_end_to_end_report_generation(client):
+async def test_end_to_end_report_generation(client, offline_agent_providers):
     """
-    Acceptance Test 1:
-    'Create a professional DOCX and PDF report about autonomous AI agents and save both files in my workspace.'
+    Acceptance Test 1: Run the requested autonomous-agent research report command.
     """
-    command = "Create a professional DOCX and PDF report about autonomous AI agents and save both files in my workspace."
+    command = (
+        "Research autonomous AI agents in detail, covering architecture, planning, reasoning, memory, "
+        "tool calling, multi-agent systems, frameworks, applications, security and future scope. "
+        "Generate a professional PDF and DOCX report."
+    )
 
+    # This fixture is explicitly synthetic and tests only the execution/reporting path.
+    # Production code has no canned research fallback.
     response = client.post("/api/v1/tasks", json={"command": command})
     assert response.status_code == 201
     data = response.json()
@@ -20,16 +25,16 @@ async def test_end_to_end_report_generation(client):
     task_id = data["id"]
     assert data["status"] == "COMPLETED"
     assert "Research and generate" in data["intent"]
-    assert "Research Agent" in data["selected_agents"]
-    assert "Document Agent" in data["selected_agents"]
-    assert "Verification Agent" in data["selected_agents"]
+    assert "research" in data["selected_agents"]
+    assert "document" in data["selected_agents"]
+    assert "verification" in data["selected_agents"]
 
     # Verify execution steps
     steps = data["steps"]
     assert len(steps) >= 4
 
     # 1. Research step
-    research_step = next(s for s in steps if s["agent_name"] == "Research Agent")
+    research_step = next(s for s in steps if s["agent_name"] == "research")
     assert research_step["status"] == "COMPLETED"
     assert research_step["output_data"] is not None
 
@@ -43,8 +48,8 @@ async def test_end_to_end_report_generation(client):
     assert pdf_step["status"] == "COMPLETED"
 
     # 3. Verification step
-    verify_step = next(s for s in steps if s["agent_name"] == "Verification Agent")
-    assert verify_step["status"] in ("COMPLETED", "PENDING")
+    verify_step = next(s for s in steps if s["agent_name"] == "verification")
+    assert verify_step["status"] == "COMPLETED"
 
     # 4. Verify physical files on disk in workspace
     final_res = data["final_result"]
@@ -64,9 +69,23 @@ async def test_end_to_end_report_generation(client):
         assert dl_res.status_code == 200
         assert len(dl_res.content) == disk_path.stat().st_size
 
+    diagnostics = final_res["verification_results"]
+    assert diagnostics["all_steps_successful"] is True
+    assert diagnostics["document_word_count"] >= 500
+    assert len(final_res["research_queries"]) == 8
+    assert len(final_res["research_sources"]) == 3
+    assert len(final_res["report_sections"]) == 13
+    print("Provider mode: TEST-ONLY synthetic fixtures (not live research)")
+    print(f"Number of search queries: {len(final_res['research_queries'])}")
+    print(f"Number of unique sources: {len(final_res['research_sources'])}")
+    print(f"Research output length: {final_res['research_output_length']}")
+    print(f"Number of generated sections: {len(final_res['report_sections'])}")
+    print(f"Document word count: {diagnostics['document_word_count']}")
+    print(f"Verification results: {diagnostics}")
+
 
 @pytest.mark.asyncio
-async def test_end_to_end_find_and_email_draft(client):
+async def test_end_to_end_find_and_email_draft(client, offline_agent_providers):
     """
     Acceptance Test 2:
     'Find the project report in my workspace and prepare an email draft with it attached.'
@@ -89,18 +108,17 @@ async def test_end_to_end_find_and_email_draft(client):
     data = response.json()
 
     assert data["status"] == "COMPLETED"
-    assert "File Management Agent" in data["selected_agents"]
-    assert "Communication Agent" in data["selected_agents"]
+    assert "file_manager" in data["selected_agents"]
+    assert "communication" in data["selected_agents"]
 
     steps = data["steps"]
-    file_step = next(s for s in steps if s["agent_name"] == "File Management Agent")
+    file_step = next(s for s in steps if s["agent_name"] == "file_manager")
     assert file_step["status"] == "COMPLETED"
     assert file_step["output_data"]["count"] >= 1
 
-    comm_step = next(s for s in steps if s["agent_name"] == "Communication Agent")
+    comm_step = next(s for s in steps if s["agent_name"] == "communication")
     assert comm_step["status"] == "COMPLETED"
     draft_data = comm_step["output_data"]
     assert draft_data["status"] == "DRAFT_READY"
     assert len(draft_data["attachments"]) >= 1
     assert any("project_report" in att["filename"] for att in draft_data["attachments"])
-

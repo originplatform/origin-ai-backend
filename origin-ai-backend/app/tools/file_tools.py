@@ -80,7 +80,7 @@ class ReadDocumentInput(BaseModel):
 class ReadDocumentTool(BaseTool):
     tool_id = "read_document"
     name = "Read Supported Document"
-    description = "Reads content from supported documents (TXT, MD, CSV, JSON, DOCX) inside the authorized workspace."
+    description = "Reads text from supported documents (TXT, MD, CSV, JSON, DOCX, PDF, XLSX) inside the authorized workspace."
     input_schema = ReadDocumentInput
     risk_level = RiskLevel.LOW_RISK
     timeout_seconds = 20
@@ -108,8 +108,26 @@ class ReadDocumentTool(BaseTool):
                 content = "\n".join(lines)[: input_params.max_characters]
                 metadata["paragraphs_count"] = len(doc.paragraphs)
             elif suffix == ".pdf":
-                # Basic PDF metadata and text indicator
-                content = f"[PDF Document: {safe_path.name}, Size: {safe_path.stat().st_size} bytes]"
+                from pypdf import PdfReader
+
+                reader = PdfReader(str(safe_path))
+                content = "\n".join(page.extract_text() or "" for page in reader.pages)
+                content = content[: input_params.max_characters]
+                metadata["pages_count"] = len(reader.pages)
+            elif suffix == ".xlsx":
+                from openpyxl import load_workbook
+
+                workbook = load_workbook(safe_path, read_only=True, data_only=True)
+                try:
+                    content = "\n".join(
+                        "\t".join(str(value) for value in row if value is not None)
+                        for sheet in workbook.worksheets
+                        for row in sheet.iter_rows(values_only=True)
+                        if any(value is not None for value in row)
+                    )[: input_params.max_characters]
+                    metadata["sheets_count"] = len(workbook.worksheets)
+                finally:
+                    workbook.close()
             else:
                 return ToolResult(success=False, error=f"Unsupported format '{suffix}' for text extraction.")
 
@@ -243,4 +261,3 @@ class PrepareDownloadTool(BaseTool):
             )
         except Exception as exc:
             return ToolResult(success=False, error=f"Failed to prepare download: {str(exc)}")
-

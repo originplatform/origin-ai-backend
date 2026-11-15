@@ -10,6 +10,8 @@ def should_continue(state: OriginState) -> str:
     - 'execute_step': if there are more pending task steps.
     - 'verify': when all execution steps have finished and ready for verification.
     """
+    from app.agents.registry import normalize_agent_id
+
     if state.status == "AWAITING_APPROVAL":
         return "end"
 
@@ -18,7 +20,7 @@ def should_continue(state: OriginState) -> str:
 
     # Are there any pending steps (excluding verification agent)?
     has_pending = any(
-        s.status == "PENDING" and s.agent_name != "Verification Agent"
+        s.status == "PENDING" and normalize_agent_id(s.agent_name) != "verification"
         for s in state.execution_plan
     )
 
@@ -26,4 +28,3 @@ def should_continue(state: OriginState) -> str:
         return "execute_step"
 
     return "verify"
-

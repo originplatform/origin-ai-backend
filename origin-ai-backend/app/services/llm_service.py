@@ -1,7 +1,6 @@
-"""LLM Service Module supporting Groq and Deterministic Fallback."""
+"""LLM service backed by Groq."""
 
-import json
-from typing import Any, Dict, Optional, Type
+from typing import Optional, Type
 from pydantic import BaseModel
 from app.core.config import settings
 from app.core.logging import get_logger, redact_sensitive_text
@@ -10,13 +9,13 @@ logger = get_logger("origin.services.llm")
 
 
 class LLMService:
-    """Provides resilient LLM inference with Groq and deterministic fallback."""
+    """Provides Groq inference and surfaces provider failures to task execution."""
 
     def __init__(self) -> None:
         self.api_key = settings.GROQ_API_KEY
         self.primary_model = settings.GROQ_MODEL
-        self.fallback_model = settings.FALLBACK_MODEL
         self._groq_client = None
+        self._initialization_error: Optional[str] = None
 
         if self.api_key and self.api_key.strip():
             try:
@@ -29,73 +28,82 @@ class LLMService:
                 )
                 logger.info(f"Initialized Groq client with model '{self.primary_model}'")
             except Exception as exc:
-                logger.warning(f"Failed to initialize Groq client: {exc}. Using deterministic engine.")
+                self._initialization_error = f"{type(exc).__name__}: {exc}"
+                logger.exception("Failed to initialize Groq client for model '%s'", self.primary_model)
                 self._groq_client = None
         else:
-            logger.info("No GROQ_API_KEY detected. Using deterministic execution engine.")
+            self._initialization_error = "GROQ_API_KEY is not configured."
+            logger.error(self._initialization_error)
 
     def is_live_llm_available(self) -> bool:
         """Checks if a live LLM integration is active."""
         return self._groq_client is not None
 
+    def _require_client(self):
+        if self._groq_client is None:
+            raise RuntimeError(
+                f"Groq model '{self.primary_model}' is unavailable: {self._initialization_error or 'client was not initialized'}"
+            )
+        return self._groq_client
+
     async def generate_text(self, prompt: str, system_prompt: Optional[str] = None) -> str:
         """Generates plain text response."""
         safe_prompt = redact_sensitive_text(prompt)
-        if self._groq_client:
-            try:
-                from langchain_core.messages import HumanMessage, SystemMessage
+        client = self._require_client()
+        from langchain_core.messages import HumanMessage, SystemMessage
 
-                messages = []
-                if system_prompt:
-                    messages.append(SystemMessage(content=system_prompt))
-                messages.append(HumanMessage(content=safe_prompt))
+        messages = []
+        if system_prompt:
+            messages.append(SystemMessage(content=system_prompt))
+        messages.append(HumanMessage(content=safe_prompt))
 
-                response = await self._groq_client.ainvoke(messages)
-                return str(response.content)
-            except Exception as exc:
-                logger.error(f"Groq invocation failed: {exc}. Using fallback logic.")
-
-        # Fallback response
-        return f"Processed query: {safe_prompt}"
+        try:
+            response = await client.ainvoke(messages)
+            return str(response.content)
+        except Exception as exc:
+            logger.exception("Groq invocation failed for model '%s'", self.primary_model)
+            raise RuntimeError(f"Groq invocation failed for model '{self.primary_model}': {exc}") from exc
 
     async def generate_structured(
         self,
         prompt: str,
         response_model: Type[BaseModel],
         system_prompt: Optional[str] = None,
-        deterministic_fallback: Optional[Dict[str, Any]] = None,
     ) -> BaseModel:
         """Generates validated structured output matching a Pydantic model."""
         safe_prompt = redact_sensitive_text(prompt)
+        client = self._require_client()
+        from langchain_core.messages import HumanMessage, SystemMessage
 
-        if self._groq_client:
-            try:
-                from langchain_core.messages import HumanMessage, SystemMessage
+        messages = []
+        if system_prompt:
+            messages.append(SystemMessage(content=system_prompt))
+        messages.append(HumanMessage(content=safe_prompt))
 
-                structured_llm = self._groq_client.with_structured_output(response_model)
-                messages = []
-                if system_prompt:
-                    messages.append(SystemMessage(content=system_prompt))
-                messages.append(HumanMessage(content=safe_prompt))
-
-                result = await structured_llm.ainvoke(messages)
-                if isinstance(result, response_model):
-                    return result
-                elif isinstance(result, dict):
-                    return response_model.model_validate(result)
-            except Exception as exc:
-                logger.warning(
-                    f"Groq structured generation failed: {exc}. Falling back to deterministic engine."
-                )
-
-        # Deterministic fallback logic
-        if deterministic_fallback:
-            return response_model.model_validate(deterministic_fallback)
-
-        raise ValueError(
-            f"No live LLM response and no deterministic fallback provided for model {response_model.__name__}"
-        )
+        try:
+            structured_llm = client.with_structured_output(
+                response_model,
+                method="json_schema",
+                strict=False,
+            )
+            result = await structured_llm.ainvoke(messages)
+            if isinstance(result, response_model):
+                return result
+            if isinstance(result, dict):
+                return response_model.model_validate(result)
+            raise TypeError(
+                f"Groq returned unsupported structured output type: {type(result).__name__}"
+            )
+        except Exception as exc:
+            logger.exception(
+                "Groq structured generation failed for model '%s' and schema '%s'",
+                self.primary_model,
+                response_model.__name__,
+            )
+            raise RuntimeError(
+                f"Groq structured generation failed for model '{self.primary_model}' "
+                f"and schema '{response_model.__name__}': {exc}"
+            ) from exc
 
 
 llm_service = LLMService()
-

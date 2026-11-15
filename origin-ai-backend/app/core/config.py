@@ -43,8 +43,7 @@ class Settings(BaseSettings):
     # LLM Settings
     DEFAULT_LLM_PROVIDER: str = "groq"
     GROQ_API_KEY: str = ""
-    GROQ_MODEL: str = "llama-3.3-70b-versatile"
-    FALLBACK_MODEL: str = "llama-3.1-8b-instant"
+    GROQ_MODEL: str = "openai/gpt-oss-120b"
 
     # Execution Engine Settings
     EXECUTION_TIMEOUT_SECONDS: int = 180
@@ -81,4 +80,3 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-

@@ -51,9 +51,18 @@ orchestrator_graph = build_orchestrator_graph()
 async def execute_task_lifecycle(initial_state: OriginState) -> OriginState:
     """Executes the autonomous agent graph for a task."""
     logger.info(f"Initiating LangGraph execution for task '{initial_state.task_id}'")
-    final_output = await orchestrator_graph.ainvoke(initial_state)
+    try:
+        final_output = await orchestrator_graph.ainvoke(initial_state)
+    except Exception as exc:
+        logger.exception("Workflow failed for task '%s'", initial_state.task_id)
+        initial_state.errors.append(f"Workflow execution failed: {exc}")
+        initial_state.status = "FAILED"
+        initial_state.verification_evidence = {
+            "all_steps_successful": False,
+            "discrepancies": [str(exc)],
+        }
+        return await completion_report_node(initial_state)
 
     if isinstance(final_output, dict):
         return OriginState.model_validate(final_output)
     return final_output
-

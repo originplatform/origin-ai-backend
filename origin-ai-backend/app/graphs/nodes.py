@@ -22,6 +22,10 @@ async def understand_and_plan_node(state: OriginState) -> OriginState:
 
     logger.info(f"Node [Plan]: Analyzing command for task '{state.task_id}'")
     updated_state = await orchestrator_agent.process(state)
+    updated_state.document_conversion = any(
+        step.tool_id == "read_document"
+        for step in updated_state.execution_plan
+    )
 
     # Persist plan in DB
     db = SessionLocal()
@@ -56,12 +60,38 @@ async def understand_and_plan_node(state: OriginState) -> OriginState:
     return updated_state
 
 
+def _persist_step_status(state: OriginState, step: PlanStep) -> None:
+    db = SessionLocal()
+    try:
+        step_record = (
+            db.query(TaskStep)
+            .filter(
+                TaskStep.task_id == state.task_id,
+                TaskStep.step_number == step.step_number,
+            )
+            .first()
+        )
+        if step_record:
+            step_record.status = step.status
+            step_record.output_data = step.output
+            step_record.error_message = step.error
+            db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to persist status for task step %s", step.step_number)
+        raise
+    finally:
+        db.close()
+
+
 async def execute_step_node(state: OriginState) -> OriginState:
     """Executes the next pending step in the execution plan."""
     # Find next pending step
     next_step: Optional[PlanStep] = None
+    from app.agents.registry import normalize_agent_id
+
     for step in state.execution_plan:
-        if step.status == "PENDING" and step.agent_name != "Verification Agent":
+        if step.status == "PENDING" and normalize_agent_id(step.agent_name) != "verification":
             next_step = step
             break
 
@@ -77,13 +107,16 @@ async def execute_step_node(state: OriginState) -> OriginState:
     if next_step.dependencies:
         for dep_num in next_step.dependencies:
             dep_step = next((s for s in state.execution_plan if s.step_number == dep_num), None)
-            if dep_step and dep_step.status != "COMPLETED":
+            if not dep_step or dep_step.status != "COMPLETED":
                 logger.warning(
-                    f"Step {next_step.step_number} depends on incomplete step {dep_num} ({dep_step.status})"
+                    "Skipping step %s because dependency %s did not complete (%s)",
+                    next_step.step_number,
+                    dep_num,
+                    dep_step.status if dep_step else "MISSING",
                 )
-                next_step.status = "FAILED"
+                next_step.status = "SKIPPED"
                 next_step.error = f"Dependency step {dep_num} was not completed."
-                state.errors.append(next_step.error)
+                _persist_step_status(state, next_step)
                 return state
 
     # 2. Risk & Approval Gate Check
@@ -147,13 +180,22 @@ async def execute_step_node(state: OriginState) -> OriginState:
             next_step.output = step_output
 
             # Store in state
-            agent_key = next_step.agent_name.lower().replace(" agent", "").replace(" ", "_")
-            if agent_key not in state.agent_outputs:
-                state.agent_outputs[agent_key] = []
-            if isinstance(state.agent_outputs[agent_key], list):
-                state.agent_outputs[agent_key].append(step_output)
-            else:
+            from app.agents.registry import normalize_agent_id
+
+            agent_key = normalize_agent_id(next_step.agent_name)
+            if agent_key == "document":
+                state.agent_outputs.setdefault(agent_key, []).append(step_output)
+            elif agent_key not in state.agent_outputs:
                 state.agent_outputs[agent_key] = step_output
+            else:
+                previous_output = state.agent_outputs[agent_key]
+                if isinstance(previous_output, list):
+                    previous_output.append(step_output)
+                else:
+                    state.agent_outputs[agent_key] = [previous_output, step_output]
+
+            if next_step.tool_id == "read_document":
+                state.source_document_content = str(step_output.get("content") or "")
 
             if next_step.tool_id:
                 state.tool_execution_results[next_step.tool_id] = step_output
@@ -171,10 +213,19 @@ async def execute_step_node(state: OriginState) -> OriginState:
             db.commit()
 
     except Exception as exc:
-        logger.error(f"Exception executing step {next_step.step_number}: {exc}")
+        logger.exception("Exception executing step %s", next_step.step_number)
         next_step.status = "FAILED"
         next_step.error = str(exc)
         state.errors.append(str(exc))
+        step_rec = (
+            db.query(TaskStep)
+            .filter(TaskStep.task_id == state.task_id, TaskStep.step_number == next_step.step_number)
+            .first()
+        )
+        if step_rec:
+            step_rec.status = next_step.status
+            step_rec.error_message = next_step.error
+            db.commit()
     finally:
         db.close()
 
@@ -184,9 +235,20 @@ async def execute_step_node(state: OriginState) -> OriginState:
 async def verification_node(state: OriginState) -> OriginState:
     """Audits generated outputs, validates filesystem artifacts, and confirms outcomes."""
     from app.agents.verifier import verification_agent
+    from app.agents.registry import normalize_agent_id
 
     logger.info(f"Node [Verify]: Performing verification audit for task '{state.task_id}'")
     updated_state = await verification_agent.process(state)
+    for step in updated_state.execution_plan:
+        if normalize_agent_id(step.agent_name) == "verification":
+            step.status = "COMPLETED"
+            step.output = {
+                "verification_passed": bool(
+                    updated_state.verification_evidence.get("all_steps_successful")
+                ),
+                "verification_results": updated_state.verification_evidence,
+            }
+            _persist_step_status(updated_state, step)
     return updated_state
 
 
@@ -194,7 +256,7 @@ async def completion_report_node(state: OriginState) -> OriginState:
     """Assembles final completion report and updates persistent task status."""
     logger.info(f"Node [Complete]: Compiling completion report for task '{state.task_id}'")
     evidence = state.verification_evidence or {}
-    all_success = evidence.get("all_steps_successful", True) and not state.errors
+    all_success = evidence.get("all_steps_successful", False) and not state.errors
 
     final_status = "COMPLETED" if all_success else "FAILED"
 
@@ -221,8 +283,20 @@ async def completion_report_node(state: OriginState) -> OriginState:
         "completed_steps": evidence.get("completed_steps", 0),
         "generated_files": download_links,
         "verification_evidence": evidence,
+        "verification_results": state.verification_results or evidence,
+        "research_queries": state.research_queries,
+        "research_sources": state.research_sources,
+        "research_findings": state.research_findings,
+        "research_summary": state.research_summary,
+        "research_output_length": len(state.research_summary)
+        + sum(len(finding) for finding in state.research_findings)
+        + sum(len(section.get("content", "")) for section in state.report_sections),
+        "report_sections": state.report_sections,
+        "document_outputs": state.document_outputs,
+        "generated_file_outputs": state.generated_files,
         "agent_outputs": state.agent_outputs,
         "errors": state.errors,
+        "planning_warnings": state.planning_warnings,
     }
 
     state.final_result = report

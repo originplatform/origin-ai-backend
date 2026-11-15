@@ -29,12 +29,24 @@ class OriginState(BaseModel):
     intent: Optional[str] = None
     objective: Optional[str] = None
     execution_plan: List[PlanStep] = Field(default_factory=list)
+    planning_warnings: List[str] = Field(default_factory=list)
     selected_agents: List[str] = Field(default_factory=list)
     selected_tools: List[str] = Field(default_factory=list)
     current_step_index: int = 0
     step_dependencies: Dict[int, List[int]] = Field(default_factory=dict)
     agent_outputs: Dict[str, Any] = Field(default_factory=dict)
     tool_execution_results: Dict[str, Any] = Field(default_factory=dict)
+    research_queries: List[str] = Field(default_factory=list)
+    research_sources: List[Dict[str, Any]] = Field(default_factory=list)
+    research_findings: List[str] = Field(default_factory=list)
+    research_summary: str = ""
+    report_sections: List[Dict[str, str]] = Field(default_factory=list)
+    document_title: str = ""
+    document_conversion: bool = False
+    source_document_content: str = ""
+    document_outputs: List[Dict[str, Any]] = Field(default_factory=list)
+    generated_files: List[Dict[str, Any]] = Field(default_factory=list)
+    verification_results: Dict[str, Any] = Field(default_factory=dict)
     approval_status: str = "NOT_REQUIRED"  # NOT_REQUIRED, PENDING, APPROVED, REJECTED
     pending_approval: Optional[Dict[str, Any]] = None
     errors: List[str] = Field(default_factory=list)
@@ -42,4 +54,3 @@ class OriginState(BaseModel):
     verification_evidence: Dict[str, Any] = Field(default_factory=dict)
     final_result: Optional[Dict[str, Any]] = None
     status: str = "PENDING"  # PENDING, PLANNING, EXECUTING, AWAITING_APPROVAL, VERIFYING, COMPLETED, FAILED, CANCELLED
-

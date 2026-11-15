@@ -1,5 +1,7 @@
 """API endpoint integration tests."""
 
+import asyncio
+
 import pytest
 
 
@@ -24,7 +26,7 @@ def test_list_agents(client):
     assert "Communication Agent" in agent_names
 
 
-def test_task_submission_and_lifecycle(client):
+def test_task_submission_and_lifecycle(client, offline_agent_providers):
     # Submit a report task
     cmd = "Create a professional DOCX and PDF report about autonomous AI agents and save both files in my workspace."
     post_res = client.post("/api/v1/tasks", json={"command": cmd})
@@ -54,7 +56,13 @@ def test_task_submission_and_lifecycle(client):
     assert len(dl_res.content) > 0
 
 
-def test_task_cancellation(client):
+def test_task_cancellation(client, offline_agent_providers, monkeypatch):
+    from app.services.execution_service import execution_service
+
+    async def hold_background_task(initial_state):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(execution_service, "run_task_async", hold_background_task)
     # Submit with background flag so it can be cancelled
     post_res = client.post(
         "/api/v1/tasks?run_in_background=true",
@@ -67,3 +75,20 @@ def test_task_cancellation(client):
     assert cancel_res.status_code == 200
     assert cancel_res.json()["status"] == "CANCELLED"
 
+
+def test_groq_planning_failure_is_exposed_in_task_status(client, monkeypatch):
+    from app.agents.research import llm_service
+
+    async def fail_generation(prompt, response_model, system_prompt=None):
+        raise RuntimeError("Groq structured generation failed: 404 model not found")
+
+    monkeypatch.setattr(llm_service, "generate_structured", fail_generation)
+    response = client.post(
+        "/api/v1/tasks",
+        json={"command": "Research autonomous agents and generate a PDF report."},
+    )
+
+    assert response.status_code == 201
+    task = response.json()
+    assert task["status"] == "FAILED"
+    assert "404 model not found" in task["error_message"]
