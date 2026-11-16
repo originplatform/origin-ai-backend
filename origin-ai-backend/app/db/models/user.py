@@ -33,6 +33,13 @@ class User(Base):
 
     name = synonym("full_name")
     tasks = relationship("Task", back_populates="user", cascade="all, delete-orphan")
+    contacts = relationship("Contact", back_populates="user", cascade="all, delete-orphan")
+    gmail_connections = relationship(
+        "GmailConnection",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
     refresh_tokens = relationship(
         "RefreshToken",
         back_populates="user",

@@ -20,7 +20,13 @@ class ExecutionService:
     """Coordinates lifecycle of user tasks from prompt to completion."""
 
     @staticmethod
-    def create_and_run_task(db: Session, user_command: str, background_task: bool = False) -> Task:
+    def create_and_run_task(
+        db: Session,
+        user_command: str,
+        *,
+        user_id: Optional[str] = None,
+        background_task: bool = False,
+    ) -> Task:
         """
         Creates a new task, validates security policies, and initiates execution.
         """
@@ -29,8 +35,9 @@ class ExecutionService:
         if not is_safe:
             raise SecurityError(f"Command blocked by security policy: {reason}")
 
-        # 2. Persist initial task record
+        # 2. Persist initial task record and pin the authenticated owner.
         task = Task(
+            user_id=user_id,
             user_command=user_command,
             status="PENDING",
         )
@@ -38,9 +45,10 @@ class ExecutionService:
         db.commit()
         db.refresh(task)
 
-        # 3. Initialize typed LangGraph state
+        # 3. Initialize typed LangGraph state with the authenticated owner context.
         initial_state = OriginState(
             task_id=task.id,
+            user_id=user_id,
             user_command=user_command,
         )
 

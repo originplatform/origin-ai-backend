@@ -14,7 +14,7 @@ from app.tools.file_tools import (
     CopyMoveFileTool,
     PrepareDownloadTool,
 )
-from app.tools.communication_tools import DraftEmailTool, SendEmailTool
+from app.tools.communication_tools import DraftEmailTool, GmailReadTool, SendEmailTool
 from app.tools.browser_tools import NavigateTool, SubmitFormTool
 from app.tools.research_tools import WebSearchTool
 from app.tools.shopping_booking_tools import SearchProductsTool, BookMovieTicketsTool
@@ -34,8 +34,8 @@ def init_tools() -> None:
         CopyMoveFileTool(),
         PrepareDownloadTool(),
         # Communication Tools
+        GmailReadTool(),
         DraftEmailTool(),
-        SendEmailTool(),
         # Research Tool
         WebSearchTool(),
         # Browser Automation Tools
@@ -65,6 +65,7 @@ __all__ = [
     "CopyMoveFileTool",
     "PrepareDownloadTool",
     "DraftEmailTool",
+    "GmailReadTool",
     "SendEmailTool",
     "WebSearchTool",
     "NavigateTool",

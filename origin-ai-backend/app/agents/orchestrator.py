@@ -1,6 +1,7 @@
 """Central Orchestrator Agent for ORIGIN AI."""
 
 import re
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Set
 from pydantic import BaseModel, Field
 from app.agents.base import BaseAgent
@@ -125,6 +126,27 @@ def detect_execution_requirements(command: str) -> Dict[str, Any]:
     }
 
 
+def _is_email_read_request(command: str) -> bool:
+    normalized = command.casefold()
+    asks_about_sender = bool(
+        re.search(r"\bwhat\s+did\s+[a-z0-9._+-]+\s+say\b", normalized)
+    )
+    return bool(
+        not re.search(r"\b(?:draft|compose|send)\b", normalized)
+        and (
+            asks_about_sender
+            or (
+                re.search(r"\b(?:email|emails|mail|mails|inbox|unread)\b", normalized)
+                and re.search(
+                    r"\b(?:check|show|find|search|read|summarize|summary|latest|unread|"
+                    r"received|from|what\s+(?:did|emails?))\b",
+                    normalized,
+                )
+            )
+        )
+    )
+
+
 class OrchestratorAgent(BaseAgent):
     """Central decision-making agent that plans, routes, and delegates tasks."""
 
@@ -141,11 +163,89 @@ class OrchestratorAgent(BaseAgent):
         """Build a requirement-driven plan for recoverable research and document requests."""
         cmd_lower = user_command.lower()
         requirements = detect_execution_requirements(user_command)
-        if requirements["research_required"] or requirements["formats"]:
+        if (
+            requirements["research_required"] or requirements["formats"]
+        ) and not _is_email_read_request(user_command):
             return self._build_required_plan(user_command, requirements)
 
+        if _is_email_read_request(user_command):
+            if "today" in cmd_lower and re.search(r"\breceiv(?:e|ed)\b", cmd_lower):
+                operation = "search"
+                day_start = datetime.now(timezone.utc).replace(
+                    hour=0,
+                    minute=0,
+                    second=0,
+                    microsecond=0,
+                )
+                day_end = day_start + timedelta(days=1)
+                query = (
+                    f"after:{int(day_start.timestamp())} "
+                    f"before:{int(day_end.timestamp())}"
+                )
+            elif "unread" in cmd_lower:
+                operation = "unread"
+                query = None
+            elif (
+                any(word in cmd_lower for word in ("find", "search", " from "))
+                or "what did" in cmd_lower
+            ):
+                operation = "search"
+                if "what did" in cmd_lower:
+                    sender_match = re.search(
+                        r"\bwhat did\s+([A-Za-z0-9._+-]+(?:\s+[A-Za-z0-9._+-]+){0,2})\s+say\b",
+                        user_command,
+                        flags=re.IGNORECASE,
+                    )
+                else:
+                    sender_match = re.search(
+                        r"\bfrom\s+([A-Za-z0-9._+-]+(?:\s+[A-Za-z0-9._+-]+){0,2})",
+                        user_command,
+                        flags=re.IGNORECASE,
+                    )
+                query = (
+                    f"from:{sender_match.group(1).strip()}"
+                    if sender_match
+                    else user_command
+                )
+            else:
+                operation = "inbox"
+                query = None
+
+            params: Dict[str, Any] = {
+                "operation": operation,
+                "max_results": 10,
+            }
+            if "summar" in cmd_lower:
+                params["summarize"] = True
+            if query:
+                params["query"] = query
+            return OrchestratorPlanOutput(
+                intent="Read-only Gmail retrieval",
+                objective="Retrieve actual Gmail messages for the authenticated owner.",
+                selected_agents=["communication", "verification"],
+                selected_tools=["gmail_read"],
+                steps=[
+                    PlanStepSchema(
+                        step_number=1,
+                        agent_name="communication",
+                        action=f"Read Gmail messages using the {operation} operation",
+                        tool_id="gmail_read",
+                        input_params=params,
+                    ),
+                    PlanStepSchema(
+                        step_number=2,
+                        agent_name="verification",
+                        action="Verify that the Gmail read returned provider data.",
+                        dependencies=[1],
+                    ),
+                ],
+            )
+
         # Case 2: File search & email drafting
-        elif any(w in cmd_lower for w in ["email", "draft", "mail", "send"]):
+        elif (
+            re.search(r"\b(?:draft|compose|prepare|send)\b", cmd_lower)
+            and re.search(r"\b(?:email|mail)\b", cmd_lower)
+        ):
             target_query = "report"
             if "find" in cmd_lower and "in my workspace" in cmd_lower:
                 part = cmd_lower.split("find", 1)[1].split("in my workspace", 1)[0].strip()
@@ -662,6 +762,8 @@ class OrchestratorAgent(BaseAgent):
 
     async def create_plan(self, user_command: str) -> OrchestratorPlanOutput:
         """Generate an LLM plan, then repair requirements deterministically when possible."""
+        if _is_email_read_request(user_command):
+            return self._generate_deterministic_plan(user_command)
         requirements = detect_execution_requirements(user_command)
         prompt = (
             f"User Command: {user_command}\n"

@@ -1,10 +1,15 @@
 """Approvals API endpoints."""
 
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+
+from app.api.v1.dependencies import get_optional_current_user
 from app.approvals.schemas import ApprovalDecisionRequest, ApprovalResponse
 from app.approvals.service import approval_service
 from app.core.logging import get_logger
+from app.db.models import Task, User
 from app.db.session import get_db
 from app.services.execution_service import execution_service
 
@@ -20,6 +25,7 @@ router = APIRouter()
 async def submit_approval_decision(
     approval_id: str,
     payload: ApprovalDecisionRequest,
+    user: Optional[User] = Depends(get_optional_current_user),
     db: Session = Depends(get_db),
 ):
     """
@@ -32,6 +38,22 @@ async def submit_approval_decision(
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Approval request '{approval_id}' not found.",
+            )
+        task = db.query(Task).filter(Task.id == updated_approval.task_id).first()
+        if task is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Approval request not found.",
+            )
+        if user is not None and task.user_id is not None and task.user_id != user.id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Approval request not found.",
+            )
+        if user is None and task.user_id is not None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Approval request not found.",
             )
 
         if updated_approval.status != "PENDING":

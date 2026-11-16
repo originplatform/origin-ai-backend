@@ -14,9 +14,12 @@ secret, HTTPS frontend and Google callback URLs, HTTPS CORS origins, and
 `COOKIE_SECURE=true`.
 
 Configure `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` together to enable Google
-Sign-In. Set `GOOGLE_REDIRECT_URI` to the registered callback URL and `FRONTEND_URL`
-to the frontend destination. Google authentication is unavailable if credentials
-are not configured. Email verification delivery is not implemented.
+Sign-In and Gmail. Set `GOOGLE_REDIRECT_URI` to the Google Sign-In callback and
+`GOOGLE_GMAIL_REDIRECT_URI` to the Gmail OAuth callback. Set `GMAIL_ENCRYPTION_KEY`
+to a persistent, randomly generated secret of at least 32 bytes; it encrypts Gmail
+tokens at rest and must remain stable across restarts. These credentials are never
+sent to the frontend or LLM. Gmail OAuth is unavailable if Google credentials or
+the encryption key are not configured. Email verification delivery is not implemented.
 
 ## Database migrations
 
@@ -36,6 +39,10 @@ the legacy `name` column (or email when name is empty). Do not use downgrade as
 an operational rollback after accounts or sessions have been created: downgrading
 removes the added authentication fields and refresh-token table.
 
+The communication migrations add owner-scoped contacts and Gmail connections,
+then add nullable `expires_at` for access-token refresh. Apply them using
+`python -m alembic upgrade head`; existing users and tables are preserved.
+
 ## API
 
 | Method | Path | Purpose |
@@ -51,6 +58,16 @@ removes the added authentication fields and refresh-token table.
 | `GET` | `/api/v1/auth/google` | Start Google Sign-In |
 | `GET` | `/api/v1/auth/google/link` | Start explicit Google linking for the current user |
 | `GET` | `/api/v1/auth/google/callback` | Handle the Google authorization response |
+| `GET` | `/api/v1/communication/gmail/connect/start` | Start authenticated, read-only Gmail OAuth |
+| `GET` | `/api/v1/communication/gmail/callback` | Complete the state-bound Gmail OAuth flow |
+| `GET` | `/api/v1/communication/gmail/status` | Check the current owner's Gmail connection |
+| `POST` | `/api/v1/communication/gmail/disconnect` | Revoke and remove the current owner's Gmail connection |
+| `GET` | `/api/v1/communication/gmail/profile` | Read the connected Gmail profile |
+| `GET` | `/api/v1/communication/gmail/messages` | Read a paginated recent inbox (`summarize=true` adds a local extractive summary) |
+| `GET` | `/api/v1/communication/gmail/messages/unread` | Read a paginated unread inbox |
+| `GET` | `/api/v1/communication/gmail/messages/search?q=...` | Search Gmail messages |
+| `GET` | `/api/v1/communication/gmail/messages/{message_id}` | Read one Gmail message |
+| `GET` | `/api/v1/communication/gmail/threads/{thread_id}` | Read a complete Gmail thread |
 
 Registration requires a password of at least 12 characters. Access tokens are
 returned in JSON and should be sent as `Authorization: Bearer <access_token>`.
@@ -69,6 +86,28 @@ the redirect, the frontend can call `GET /api/v1/auth/csrf`, then
 `POST /api/v1/auth/refresh` with the returned CSRF token to obtain an access
 token. An existing account is not linked based on matching email alone; linking
 must be started from an authenticated account.
+
+Gmail uses a separate owner-bound OAuth state cookie and PKCE flow. The
+`/communication/gmail/connect/start` endpoint requires a bearer access token;
+the Google callback validates its short-lived signed cookie and redirects with a
+generic connection result. Gmail access is limited to the read-only
+`gmail.readonly` scope plus OpenID/email identity scopes. Access and refresh
+tokens are encrypted in `gmail_connections`; they are not returned by any API.
+Inbox/message/thread reads require authentication and always derive the owner
+from the verified JWT. Disconnection removes local credentials even if Google's
+revocation endpoint cannot confirm revocation; the response reports that outcome.
+Email sending is not registered or available in this phase.
+Email summaries are extractive and generated locally; received message content is
+not sent to the LLM planner. The task phrase “received today” uses UTC day
+boundaries because this backend does not yet store a per-user time zone.
+
+To configure Google Cloud, create an OAuth 2.0 Web application client, add the
+exact value of `GOOGLE_GMAIL_REDIRECT_URI` to its authorized redirect URIs, and
+enable the Gmail API. Configure the client ID/secret, callback URL, and a
+persistent encryption key in the backend environment. Google may require OAuth
+consent-screen configuration or verification before granting Gmail read scope.
+Local tests mock Google; an actual account connection requires valid Cloud
+credentials and consent-screen setup.
 
 ## Deployment notes
 

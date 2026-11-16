@@ -151,7 +151,7 @@ async def execute_step_node(state: OriginState) -> OriginState:
 
     agent = get_agent(next_step.agent_name)
     db = SessionLocal()
-    context = {"db": db, "task_id": state.task_id}
+    context = {"db": db, "task_id": state.task_id, "user_id": state.user_id}
     next_step.status = "RUNNING"
 
     try:

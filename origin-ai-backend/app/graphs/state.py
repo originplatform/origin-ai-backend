@@ -25,6 +25,7 @@ class OriginState(BaseModel):
     """
 
     task_id: str
+    user_id: Optional[str] = None
     user_command: str
     intent: Optional[str] = None
     objective: Optional[str] = None

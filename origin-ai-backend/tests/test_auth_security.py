@@ -98,7 +98,12 @@ def test_jwt_rejects_expired_malformed_and_wrong_signature(monkeypatch):
 
 def test_production_settings_require_strong_key_and_secure_cookie():
     with pytest.raises(ValueError, match="strong JWT_SECRET_KEY"):
-        Settings(ENVIRONMENT="production", JWT_SECRET_KEY="", COOKIE_SECURE=True)
+        Settings(
+            ENVIRONMENT="production",
+            JWT_SECRET_KEY="",
+            COOKIE_SECURE=True,
+            _env_file=None,
+        )
 
     with pytest.raises(ValueError, match="COOKIE_SECURE=true"):
         Settings(
@@ -108,6 +113,7 @@ def test_production_settings_require_strong_key_and_secure_cookie():
             CORS_ORIGINS=["https://frontend.example"],
             FRONTEND_URL="https://frontend.example",
             GOOGLE_REDIRECT_URI="https://api.example/api/v1/auth/google/callback",
+            _env_file=None,
         )
 
     Settings(
@@ -117,6 +123,7 @@ def test_production_settings_require_strong_key_and_secure_cookie():
         CORS_ORIGINS=["https://frontend.example"],
         FRONTEND_URL="https://frontend.example",
         GOOGLE_REDIRECT_URI="https://api.example/api/v1/auth/google/callback",
+        _env_file=None,
     )
 
 

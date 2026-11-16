@@ -15,7 +15,7 @@ class CommunicationAgent(BaseAgent):
     name = "Communication Agent"
     description = "Drafts emails, attaches authorized workspace files, and handles communication workflows."
     system_prompt = "You are the Communication Specialist for ORIGIN AI. Formulate professional correspondence."
-    allowed_tools = ["draft_email", "send_email"]
+    allowed_tools = ["gmail_read", "draft_email"]
 
     async def execute_step(
         self,

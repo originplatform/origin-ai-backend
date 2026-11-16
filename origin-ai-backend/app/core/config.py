@@ -60,6 +60,8 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
     GOOGLE_REDIRECT_URI: str = "http://localhost:8000/api/v1/auth/google/callback"
+    GOOGLE_GMAIL_REDIRECT_URI: str = "http://localhost:8000/api/v1/communication/gmail/callback"
+    GMAIL_ENCRYPTION_KEY: str = ""
     FRONTEND_URL: str = "http://localhost:5173"
     COOKIE_SECURE: bool = False
     COOKIE_SAMESITE: str = "lax"
@@ -125,7 +127,7 @@ class Settings(BaseSettings):
             raise ValueError("COOKIE_SAMESITE must be lax, strict, or none.")
         return normalized
 
-    @field_validator("FRONTEND_URL", "GOOGLE_REDIRECT_URI")
+    @field_validator("FRONTEND_URL", "GOOGLE_REDIRECT_URI", "GOOGLE_GMAIL_REDIRECT_URI")
     @classmethod
     def validate_auth_urls(cls, value: str) -> str:
         parsed = urlparse(value)
@@ -174,6 +176,8 @@ class Settings(BaseSettings):
             raise ValueError(
                 "GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be configured together."
             )
+        if self.GMAIL_ENCRYPTION_KEY and len(self.GMAIL_ENCRYPTION_KEY.encode("utf-8")) < 32:
+            raise ValueError("GMAIL_ENCRYPTION_KEY must contain at least 32 bytes.")
         if self.JWT_SECRET_KEY and len(secret_bytes) < minimum_secret_length:
             raise ValueError(
                 f"JWT_SECRET_KEY must contain at least {minimum_secret_length} bytes "
@@ -192,6 +196,10 @@ class Settings(BaseSettings):
             if (
                 urlparse(self.FRONTEND_URL).scheme != "https"
                 or urlparse(self.GOOGLE_REDIRECT_URI).scheme != "https"
+                or (
+                    self.GMAIL_ENCRYPTION_KEY
+                    and urlparse(self.GOOGLE_GMAIL_REDIRECT_URI).scheme != "https"
+                )
             ):
                 raise ValueError("Production authentication URLs must use HTTPS.")
             if any(urlparse(origin).scheme != "https" for origin in self.CORS_ORIGINS):
