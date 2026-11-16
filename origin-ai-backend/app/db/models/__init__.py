@@ -9,10 +9,12 @@ from app.db.models.tool_execution import ToolExecution
 from app.db.models.approval import ApprovalRequest
 from app.db.models.file import GeneratedFile
 from app.db.models.audit import AuditLog
+from app.db.models.refresh_token import RefreshToken
 
 __all__ = [
     "Base",
     "User",
+    "RefreshToken",
     "Task",
     "TaskStep",
     "AgentExecution",
